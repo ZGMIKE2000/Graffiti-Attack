@@ -87,17 +87,9 @@ python test_models.py
 
 ## 📝 Notes
 
-If you get errors like `ModuleNotFoundError: No module named 'click'`, fix them with:
-
-```bash
-conda install click
-# or
-pip install click
-```
-
 ---
 
 ## 📚 License
 
-- This repo: [Your License Here]  
+- This repo: [MIT License](LICENSE)
 - StyleGAN3: [NVlabs License](https://github.com/NVlabs/stylegan3/blob/main/LICENSE.txt)
