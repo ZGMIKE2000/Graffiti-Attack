@@ -1,10 +1,10 @@
-# 🎨 Graffiti Attack
+# Graffiti Attack
 
 Adversarial patch optimization using **StyleGAN3**, **YOLOv8**, and **Nevergrad** to generate natural-looking graffiti attacks on object detection systems.
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 graffiti_attack/
@@ -21,7 +21,7 @@ graffiti_attack/
 
 ---
 
-## ⚙️ Setup Instructions
+## Setup Instructions
 
 ### 1. Clone the Repository
 
@@ -32,8 +32,6 @@ cd graffiti_attack
 
 ### 2. Set Up Python Environment
 
-Install PyTorch for your system manually:  
-👉 https://pytorch.org/get-started/locally/
 
 Then install other requirements:
 
@@ -60,7 +58,7 @@ sys.path.append('/home/yourusername/stylegan3')  # Adjust path if needed
 
 ---
 
-## 🚀 Usage
+## Usage
 
 Edit `main.py` to set:
 - dataset path
@@ -75,7 +73,7 @@ python main.py
 
 ---
 
-## 🧪 Testing
+## Testing
 
 To check if model loading works, update paths in `test_models.py`:
 
