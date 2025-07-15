@@ -1,37 +1,38 @@
 # Graffiti Attack
 
-Adversarial Patch Optimization Using StyleGAN3, YOLOv8, and Nevergrad
+## Adversarial Patch Optimization Using StyleGAN3, YOLOv8, and Nevergrad
 
 This project investigates the use of generative models and black-box optimization to produce naturalistic adversarial patches in the form of graffiti, aimed at degrading the performance of object detection systems in autonomous driving scenarios.
-Generator: StyleGAN3 (Fine-tuned on Graffiti Data)
 
-The generator is based on StyleGAN3, fine-tuned on a curated dataset of approximately 1,000 graffiti images. StyleGAN3 is selected for:
+### Generator: StyleGAN3 (Fine-tuned on Graffiti Data)
 
-    Its high style diversity, which enables generation of visually diverse graffiti patterns that better mimic real-world variability.
+The generator is based on **StyleGAN3**, fine-tuned on a curated dataset of approximately 1,000 graffiti images. StyleGAN3 is selected for:
 
-    Its use of Adaptive Data Augmentation (ADA), which improves training robustness in low-data regimes.
+- **High style diversity**, enabling generation of visually diverse graffiti patterns that mimic real-world variability.
+- **Adaptive Data Augmentation (ADA)**, improving training robustness under limited data conditions.
 
-Patch Extraction and Application
+### Patch Extraction and Application
 
-Generated graffiti samples are post-processed using OpenCV to extract the relevant patch region, which is then overlaid onto traffic sign images. Currently, patches are applied at the center of the sign area for controlled testing.
+Generated graffiti samples are post-processed using **OpenCV** to extract the relevant patch region, which is then overlaid onto traffic sign images.  
+Currently, patches are applied at the center of the sign area for controlled testing.
 
-    Future Work: Integrate a placement optimization module to allow spatial variation and improve attack strength.
+- **Planned:** Integrate a placement optimization module to allow spatial variation and increase adversarial strength.
 
-Adversarial Optimization Strategy
+### Adversarial Optimization Strategy
 
-The target model is YOLOv8m, treated as a black-box detector. Since gradient information is unavailable, Nevergrad, an evolutionary optimization framework, is employed to search the StyleGAN3 latent space for graffiti samples that maximize adversarial effect.
+The target detection model is **YOLOv8m**, treated as a **black-box**.  
+Since gradient access is unavailable, **Nevergrad** (evolutionary optimizer) is used to search the StyleGAN3 latent space for graffiti samples that maximize the adversarial effect.
 
 Two attack objectives are considered:
 
-    Detection Attack: Minimize the detector's confidence score or suppress detection entirely.
+- **Detection Attack:** Minimize detection confidence or suppress detection entirely.
+- **Classification Attack:** Induce misclassification (e.g., "Stop Sign" → "Speed Limit").
 
-    Classification Attack: Induce misclassification (e.g., altering predictions from "Stop Sign" to "Speed Limit").
+### Planned Enhancements
 
-Planned Enhancements
+- **Surrogate Model Integration:** A white-box model will be embedded in GAN training to guide generation and improve transferability.
+- **Cross-Model Evaluation:** Additional detectors will be tested to assess generalization of the adversarial patches.
 
-    Surrogate Model Integration: A white-box surrogate will be incorporated during GAN training to embed adversarial priors directly into the generator, improving transferability and attack reliability.
-
-    Cross-model Evaluation: Additional object detectors will be included to assess generalization and robustness of the optimized patches across architectures.
 ---
 
 ## Project Structure
