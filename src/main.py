@@ -11,12 +11,21 @@ Or use a YAML config:
     python main.py --config myexperiment.yaml
 """
 import os
+import traceback
 import sys
 import torch
 import click
 from tqdm import tqdm
 import logging
 import yaml
+
+from utils import get_bbox_for_image
+sys.path.append('/home/michele/hdd/stylegan3_error')
+
+from processing import process_image
+from models import load_stylegan3_generator, load_yolov8_model
+from utils import validate_bbox_yolo
+from processing import process_image
 
 
 def load_config(config_path):
@@ -40,9 +49,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
-from models import load_stylegan3_generator, load_yolov8_model
-from utils import get_bbox_for_image, validate_bbox_yolo
-from processing import process_image
 
 
 @click.command()
@@ -58,6 +64,7 @@ from processing import process_image
 @click.option('--num-generations', type=int, default=100, help="Number of generations for optimization")
 @click.option('--population-size', type=int, default=10, help="Population size for optimization")
 @click.option('--output-dir', type=click.Path(), default="output", show_default=True, help="Directory to save results")
+
 def main(stylegan3_snapshot_path, yolov8_model_path, sign_img_path, sign_img_folder, bbox_yolo, bbox_folder,
          target_class_id, target_misclassify_id, num_generations, population_size, output_dir, config):
 
@@ -91,13 +98,48 @@ def main(stylegan3_snapshot_path, yolov8_model_path, sign_img_path, sign_img_fol
         # Batch mode: process all images in the folder
 
         image_files = [f for f in os.listdir(sign_img_folder) if f.lower().endswith((".jpg", ".png", ".jpeg"))]
-        bbox_files = [f for f in os.listdir(bbox_folder or sign_img_folder) if f.lower().endswith(".txt")]
-        if len(image_files) != len(bbox_files):
-            logging.warning(f"Number of images ({len(image_files)}) and bbox files ({len(bbox_files)}) do not match.")
+        # Filter out images without corresponding label files
+        filtered_image_files = []
+        for fname in image_files:
+            label_name = os.path.splitext(fname)[0] + ".txt"
+            label_path = os.path.join(bbox_folder or sign_img_folder, label_name)
+            if os.path.exists(label_path):
+                filtered_image_files.append(fname)
+            else:
+                # Optionally, delete the image file if no label exists
+                img_path = os.path.join(sign_img_folder, fname)
+                os.remove(img_path)
+                logging.warning(f"Deleted {img_path} because label {label_path} does not exist.")
 
-        image_files = [f for f in os.listdir(sign_img_folder) if f.lower().endswith((".jpg", ".png", ".jpeg"))]
+
+        # if sign_img_folder:
+        #     image_files = [
+        #         os.path.join(sign_img_folder, f)
+        #         for f in os.listdir(sign_img_folder)
+        #         if f.lower().endswith((".jpg", ".jpeg", ".png"))
+        #     ]
+
+        #     valid_images = []
+        #     for img_path in image_files:
+        #         try:
+        #             bbox = get_bbox_for_image(img_path, bbox_folder)
+        #             validate_bbox_yolo(bbox)
+        #             valid_images.append(img_path)
+        #         except Exception as e:
+        #             logging.error(f"Skipping {img_path}: {e}")
+        #             continue
+
+        #     if not valid_images:
+        #         logging.error("No valid images with bboxes found. Exiting.")
+        #         sys.exit(1)
+
+        #     process_universal_patch(
+        #         G_frozen, yolov8_model, valid_images, bbox_folder, output_dir,
+        #         num_generations, population_size
+        #     )
+
         failed_cases = []
-        for fname in tqdm(image_files, desc="Processing images"):
+        for fname in tqdm(filtered_image_files, desc="Processing images"):
             img_path = os.path.join(sign_img_folder, fname)
             try:
                 bbox = get_bbox_for_image(img_path, bbox_folder)
@@ -105,11 +147,12 @@ def main(stylegan3_snapshot_path, yolov8_model_path, sign_img_path, sign_img_fol
                 process_image(
                     G_frozen, yolov8_model,
                     img_path,
-                    bbox, target_class_id, target_misclassify_id,
-                    num_generations, population_size
+                    bbox, bbox_folder, target_class_id, target_misclassify_id,
+                    num_generations, population_size, output_dir
                 )
             except Exception as e:
                 logging.error(f"Failed to process {img_path}: {e}")
+                traceback.print_exc()
                 failed_cases.append((img_path, str(e)))
             continue
 
