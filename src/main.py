@@ -1,47 +1,25 @@
-"""
-Graffiti Attack Patch Optimization Tool
-
-Usage (single image):
-    python main.py --stylegan3-snapshot-path /path/to/sg3.pkl --yolov8-model-path /path/to/yolov8.pt --sign-img-path myimage.jpg --bbox-yolo 0.5 0.5 0.2 0.2 --target-class-id 25
-
-Usage (batch mode):
-    python main.py --stylegan3-snapshot-path /path/to/sg3.pkl --yolov8-model-path /path/to/yolov8.pt --sign-img-folder ./images --bbox-folder ./bboxes --target-class-id 25
-
-Or use a YAML config:
-    python main.py --config myexperiment.yaml
-"""
 import os
-import traceback
 import sys
 import torch
 import click
-from tqdm import tqdm
 import logging
 import yaml
+import random
+import numpy as np
 
-from utils import get_bbox_for_image
 sys.path.append('/home/michele/hdd/stylegan3_error')
 
 from processing import process_image
 from models import load_stylegan3_generator, load_yolov8_model
 from utils import validate_bbox_yolo
-from processing import process_image
-
 
 def load_config(config_path):
-    """
-    Load a YAML configuration file and return its contents as a dictionary.
-
-    Args:
-        config_path (str): Path to the YAML config file.
-
-    Returns:
-        dict: Configuration parameters.
-    """
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
-# Add StyleGAN3 repo to sys.path for dnnlib/legacy
-sys.path.append('/home/michele/hdd/stylegan3')  # Adjust as needed
+
+def merge_config(cli_args, yaml_config):
+    """Merge CLI arguments with YAML config, giving priority to CLI."""
+    return {key: cli_args.get(key) or yaml_config.get(key) for key in yaml_config.keys()}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,135 +27,78 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
-
-
 @click.command()
 @click.option('--config', type=click.Path(exists=True), help="YAML config file with arguments")
-@click.option('--stylegan3-snapshot-path', required=True, type=click.Path(exists=True), help="Path to StyleGAN3 .pkl")
-@click.option('--yolov8-model-path', required=True, type=click.Path(exists=True), help="Path to YOLOv8 .pt")
-@click.option('--sign-img-path', type=click.Path(), help="Path to a single sign image")
-@click.option('--sign-img-folder', type=click.Path(), help="Folder with sign images (batch mode)")
-@click.option('--bbox-yolo', nargs=4, type=float, default=None, help="YOLO bbox [x_center, y_center, w, h] (normalized, single image mode)")
+@click.option('--gan-snapshot-path', required=True, type=click.Path(exists=True), help="Path to StyleGAN3 .pkl")
+@click.option('--yolo-model-path', required=True, type=click.Path(exists=True), help="Path to YOLOv8 .pt")
+@click.option('--img-path', type=click.Path(), help="Path to a single sign image")
+@click.option('--img-folder', type=click.Path(), help="Folder with sign images (batch mode)")
+@click.option('--bbox-path', nargs=4, type=float, default=None, help="YOLO bbox [x_center, y_center, w, h] (normalized, single image mode)")
 @click.option('--bbox-folder', type=click.Path(), help="Folder with YOLO bbox .txt files (batch mode, default: same as image folder)")
 @click.option('--target-class-id', required=True, type=int, help="Class ID to fool")
 @click.option('--target-misclassify-id', type=int, default=None, help="Target class ID for misclassification (optional)")
 @click.option('--num-generations', type=int, default=100, help="Number of generations for optimization")
 @click.option('--population-size', type=int, default=10, help="Population size for optimization")
 @click.option('--output-dir', type=click.Path(), default="output", show_default=True, help="Directory to save results")
-
-def main(stylegan3_snapshot_path, yolov8_model_path, sign_img_path, sign_img_folder, bbox_yolo, bbox_folder,
+def main(gan_snapshot_path, yolo_model_path, img_path, img_folder, bbox_path, bbox_folder,
          target_class_id, target_misclassify_id, num_generations, population_size, output_dir, config):
 
     # --- Load YAML config if provided ---
-
     if config:
         cfg = load_config(config)
-        # Only override if not set by CLI (CLI has priority)
-        stylegan3_snapshot_path = cfg.get('stylegan3_snapshot_path', stylegan3_snapshot_path)
-        yolov8_model_path = cfg.get('yolov8_model_path', yolov8_model_path)
-        sign_img_path = cfg.get('sign_img_path', sign_img_path)
-        sign_img_folder = cfg.get('sign_img_folder', sign_img_folder)
-        bbox_yolo = cfg.get('bbox_yolo', bbox_yolo)
-        bbox_folder = cfg.get('bbox_folder', bbox_folder)
-        target_class_id = cfg.get('target_class_id', target_class_id)
-        target_misclassify_id = cfg.get('target_misclassify_id', target_misclassify_id)
-        num_generations = cfg.get('num_generations', num_generations)
-        population_size = cfg.get('population_size', population_size)
-        output_dir = cfg.get('output_dir', output_dir)
-    
+        cli_args = locals()
+        merged_config = merge_config(cli_args, cfg)
+        locals().update(merged_config)
+
     os.makedirs(output_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # --- Set Seed for Reproducibility ---
+    seed = int.from_bytes(os.urandom(4), 'little')
+    np.random.seed(seed)
+    random.seed(seed)
+    logging.info(f"Using seed: {seed}")
+
     # --- Load Models ---
-    G_frozen = load_stylegan3_generator(os.path.expanduser(stylegan3_snapshot_path), device)
+    G_frozen = load_stylegan3_generator(os.path.expanduser(gan_snapshot_path), device)
     G_frozen.eval()
-    yolov8_model = load_yolov8_model(os.path.expanduser(yolov8_model_path), device)
+    yolov8_model = load_yolov8_model(os.path.expanduser(yolo_model_path), device)
 
     # --- Batch or Single Image ---
-    if sign_img_folder:
+    if img_folder:
         # Batch mode: process all images in the folder
+        image_files = [
+            os.path.join(img_folder, f) for f in os.listdir(img_folder)
+            if f.lower().endswith((".jpg", ".png", ".jpeg")) and
+            os.path.exists(os.path.join(bbox_folder or img_folder, os.path.splitext(f)[0] + ".txt"))
+        ]
 
-        image_files = [f for f in os.listdir(sign_img_folder) if f.lower().endswith((".jpg", ".png", ".jpeg"))]
-        # Filter out images without corresponding label files
-        filtered_image_files = []
-        for fname in image_files:
-            label_name = os.path.splitext(fname)[0] + ".txt"
-            label_path = os.path.join(bbox_folder or sign_img_folder, label_name)
-            if os.path.exists(label_path):
-                filtered_image_files.append(fname)
-            else:
-                # Optionally, delete the image file if no label exists
-                img_path = os.path.join(sign_img_folder, fname)
-                os.remove(img_path)
-                logging.warning(f"Deleted {img_path} because label {label_path} does not exist.")
-
-
-        # if sign_img_folder:
-        #     image_files = [
-        #         os.path.join(sign_img_folder, f)
-        #         for f in os.listdir(sign_img_folder)
-        #         if f.lower().endswith((".jpg", ".jpeg", ".png"))
-        #     ]
-
-        #     valid_images = []
-        #     for img_path in image_files:
-        #         try:
-        #             bbox = get_bbox_for_image(img_path, bbox_folder)
-        #             validate_bbox_yolo(bbox)
-        #             valid_images.append(img_path)
-        #         except Exception as e:
-        #             logging.error(f"Skipping {img_path}: {e}")
-        #             continue
-
-        #     if not valid_images:
-        #         logging.error("No valid images with bboxes found. Exiting.")
-        #         sys.exit(1)
-
-        #     process_universal_patch(
-        #         G_frozen, yolov8_model, valid_images, bbox_folder, output_dir,
-        #         num_generations, population_size
-        #     )
-
-        failed_cases = []
-        for fname in tqdm(filtered_image_files, desc="Processing images"):
-            img_path = os.path.join(sign_img_folder, fname)
-            try:
-                bbox = get_bbox_for_image(img_path, bbox_folder)
-                validate_bbox_yolo(bbox)
-                process_image(
-                    G_frozen, yolov8_model,
-                    img_path,
-                    bbox, bbox_folder, target_class_id, target_misclassify_id,
-                    num_generations, population_size, output_dir
-                )
-            except Exception as e:
-                logging.error(f"Failed to process {img_path}: {e}")
-                traceback.print_exc()
-                failed_cases.append((img_path, str(e)))
-            continue
-
-        if failed_cases:
-            logging.warning(f"\n{len(failed_cases)} images failed to process:")
-            for img_path, reason in failed_cases:
-                logging.warning(f"  {img_path}: {reason}")
-
-    elif sign_img_path:
-        # Single image mode
-
-        if bbox_yolo is None:
-            logging.error("Please provide --bbox-yolo for single image mode.")
+        if not image_files:
+            logging.warning("No valid images with corresponding labels found in the folder.")
             sys.exit(1)
-        validate_bbox_yolo(bbox_yolo)
+
         process_image(
             G_frozen, yolov8_model,
-            sign_img_path,
-            bbox_yolo, target_class_id, target_misclassify_id,
+            image_files, bbox_folder, target_class_id,
+            num_generations, population_size, output_dir
+        )
+
+    elif img_path:
+        # Single image mode
+        if bbox_path is None:
+            logging.error("Please provide --bbox-path for single image mode.")
+            sys.exit(1)
+
+        validate_bbox_yolo(bbox_path)
+        process_image(
+            G_frozen, yolov8_model,
+            img_path,
+            bbox_path, target_class_id, target_misclassify_id,
             num_generations, population_size
         )
     else:
         # No valid input provided
-
-        print("Please provide either --sign-img-path or --sign-img-folder.")
+        logging.error("Please provide either --img-path or --img-folder.")
         sys.exit(1)
 
 if __name__ == "__main__":
