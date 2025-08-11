@@ -18,8 +18,6 @@ Naturalness survey to be conducted on the generated patches.
 Generated graffiti samples are post-processed using **OpenCV** to extract the relevant patch region, which is then overlaid onto traffic sign images.  
 The patches are applied after some augmentations from Kornia repository and then tested against the yolov8m model. Current approach of the loss calculation is based the average loss of each patched image evaluation on the yolo model wrt the pre-patched image.
 
-- **Testing:** Integrated Optuna for placement optimization to allow spatial variation and increase adversarial strength.
-
 ### Adversarial Optimization Strategy
 
 The target detection model is **YOLOv8m**, treated as a **black-box**.  
@@ -36,12 +34,14 @@ About the Yolo model: The model is finetuned on a custom dataset retrieved from 
 
 ### Planned Enhancements
 
-- **Surrogate Model Integration:** A white-box model will be embedded in GAN training to guide generation (shape and color) and improve transferability (aimed attack on object detectors).
-- **Cross-Model Evaluation:** Additional detectors will be tested to assess generalization of the adversarial patches.
+- **Surrogate Model Integration:** A white-box model will be embedded in GAN training to guide generation (edges and shapes).
+- **Cross-Model Evaluation:** Additional detectors will be tested to assess transferability of the adversarial patches.
 
 ### Current results summary
 
-I empirically found that scale ≥ 0.9 is the effective threshold where the adversarial patch leads to a >90% miss detection rate for YOLOv8m on stop signs. Between 0.8–0.9, detection reliability degrades sharply but inconsistently, with mAP reductions ranging from 0.96 to as low as 0.20 depending on sign shape and background.
+In prior experiments, adversarial patches smaller than 90% of the traffic sign’s area exhibited limited effectiveness against the YOLO detector. However, when patch scale, transparency (alpha), and positional coordinates are jointly optimized within the evolutionary search, successful attacks (stop signs not detected) are achievable with patches occupying as little as 50% of the sign’s area.
+
+Experimentations are still on-going, there will be tables of results for clarity.
 
 -Eventual testing on other classes and robust benchmarking results will be retrieved.
 
@@ -52,11 +52,14 @@ I empirically found that scale ≥ 0.9 is the effective threshold where the adve
 ```
 graffiti_attack/
 ├──src
+    ├── eot.py             # EOT augmentation pipeline from Kornia
+    ├── main.py            # Main file
     ├── models.py          # Loads StyleGAN3 and YOLOv8 models
-    ├── patch.py           # Patch creation, masking, and application logic
     ├── optimization.py    # Evolution strategy and loss functions
+    ├── patch.py           # Patch creation, masking, and application logic
+    ├── placement.py       # Helper for patching mechanism
+    ├── processing.py      # Helper for optimization mechanism
     ├── utils.py           # Helper utilities
-    ├── main.py            # Main experiment loop
     ├── test_models.py     # Sanity check for model loading
 ├── requirements.txt   # Dependencies (excludes StyleGAN3)
 └── README.md          # This file
