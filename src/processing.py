@@ -1,27 +1,37 @@
 import os
 import logging
 import cv2
-from PIL import Image
 import torch
-from patch import extract_graffiti_mask_from_patch, extract_graffiti_rgba_from_patch, realistic_patch_applier
 from utils import yolo_bbox_to_pixel
 from optimization import run_es_optimization
-import numpy as np
 
-def process_image(
-    G_frozen, yolov8_model, images_path, bbox_folder, target_class_id,
-    num_generations, population_size, output_dir
-):
+def build_dataset(images_path, bbox_folder=None, target_class_id=None):
+    """
+    Build a dataset of images and their bounding boxes for the target class.
+
+    Args:
+        images_path (str or List[str]): Path to a single image or a list of image paths.
+        bbox_folder (str): Folder containing YOLO bbox .txt files (batch mode).
+        target_class_id (int): Target class ID to filter bounding boxes.
+        bbox_path (str): Path to a single YOLO bbox .txt file (single image mode).
+
+    Returns:
+        List[Tuple[np.ndarray, List[Tuple[int, int, int, int]], str]]:
+            A list of tuples containing the image, bounding boxes, and image path.
+    """
     real_sign_images_dataset = []
-    for image_path in images_path:
-        img_np = cv2.imread(image_path)
+
+    # Handle single image mode
+    if isinstance(images_path, str):
+        logging.info("Single file mode detected. Building dataset for one image...")
+        img_np = cv2.imread(images_path)
         if img_np is None:
-            logging.warning(f"Skipping {image_path}: image could not be read")
-            continue
+            logging.error(f"Image could not be read: {images_path}")
+            raise ValueError(f"Invalid image path: {images_path}")
+
         img_h, img_w = img_np.shape[:2]
-        bbox_file = os.path.join(bbox_folder, os.path.splitext(os.path.basename(image_path))[0] + ".txt")
         bboxes = []
-        with open(bbox_file, "r") as f:
+        with open(bbox_folder, "r") as f:
             for line in f:
                 parts = line.strip().split()
                 cls_id = int(parts[0])
@@ -29,45 +39,71 @@ def process_image(
                 if cls_id == target_class_id:
                     x1, y1, x2, y2 = yolo_bbox_to_pixel(bbox_yolo, img_w, img_h)
                     bboxes.append((x1, y1, x2, y2))
-        if bboxes:
-            real_sign_images_dataset.append((img_np, bboxes, image_path))
+
+        if not bboxes:
+            logging.error(f"No bounding boxes found for target class {target_class_id} in {bbox_folder}")
+            raise ValueError(f"No bounding boxes found in {bbox_folder}")
+
+        real_sign_images_dataset.append((img_np, bboxes, images_path))
+
+    # Handle batch mode
+    elif isinstance(images_path, list) and bbox_folder:
+        logging.info("Batch mode detected. Building dataset...")
+        for image_path in images_path:
+            img_np = cv2.imread(image_path)
+            if img_np is None:
+                logging.warning(f"Skipping {image_path}: image could not be read")
+                continue
+            img_h, img_w = img_np.shape[:2]
+            bbox_file = os.path.join(bbox_folder, os.path.splitext(os.path.basename(image_path))[0] + ".txt")
+            bboxes = []
+            with open(bbox_file, "r") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    cls_id = int(parts[0])
+                    bbox_yolo = list(map(float, parts[1:5]))
+                    if cls_id == target_class_id:
+                        x1, y1, x2, y2 = yolo_bbox_to_pixel(bbox_yolo, img_w, img_h)
+                        bboxes.append((x1, y1, x2, y2))
+            if bboxes:
+                real_sign_images_dataset.append((img_np, bboxes, image_path))
+
+    else:
+        raise ValueError("Invalid input: 'images_path' must be a string or list, and 'bbox_folder' or 'bbox_path' must be provided.")
 
     logging.info(f"Loaded {len(real_sign_images_dataset)} images for optimization.")
+    return real_sign_images_dataset
 
-    best_latent_code, _ = run_es_optimization(
-        G_frozen, yolov8_model, real_sign_images_dataset,
+def process_image(
+    G_frozen, yolov8_model, images_path, bbox_folder, target_class_id,
+    num_generations, population_size, output_dir, checkpoint_dir, bbox_path=None
+):
+    """
+    Process images for black-box patch optimization.
+
+    Args:
+        G_frozen: The generator model.
+        yolov8_model: The YOLOv8 model.
+        images_path: Path to a single image or a list of image paths.
+        bbox_folder: Folder containing YOLO bbox .txt files (batch mode).
+        target_class_id: Target class ID for optimization.
+        num_generations: Number of generations for optimization.
+        population_size: Population size for optimization.
+        output_dir: Directory to save results.
+        checkpoint_dir: Directory to save checkpoints.
+        bbox_path: Path to a single YOLO bbox .txt file (single image mode).
+    """
+
+    # Debugging logs
+    logging.info(f"images_path: {images_path}")
+    logging.info(f"bbox_folder: {bbox_folder}")
+    logging.info(f"bbox_path: {bbox_path}")
+    # Build the dataset
+    img_dataset = build_dataset(images_path, bbox_folder, target_class_id)
+
+    run_es_optimization(
+        G_frozen, yolov8_model, img_dataset,
         target_class_id,
-        num_generations=num_generations, population_size=population_size
+        num_generations=num_generations, population_size=population_size,
+        checkpoint_dir=checkpoint_dir
     )
-
-    logging.info("Black-Box Patch Optimization completed.")
-
-    if best_latent_code is not None:
-        os.makedirs(output_dir, exist_ok=True)
-        with torch.no_grad():
-            best_patch_tensor = G_frozen(best_latent_code, c=None, truncation_psi=0.7)
-        best_patch_np = (best_patch_tensor[0].permute(1, 2, 0).cpu().numpy() * 127.5 + 127.5).astype(np.uint8)
-        best_mask_np = extract_graffiti_mask_from_patch(best_patch_np)
-        best_rgba_patch_np = extract_graffiti_rgba_from_patch(best_patch_np, best_mask_np)
-
-        Image.fromarray(best_rgba_patch_np).save(os.path.join(output_dir, "best_graffiti_patch_rgba.png"))
-        Image.fromarray(best_mask_np).save(os.path.join(output_dir, "best_graffiti_mask.png"))
-        Image.fromarray(best_patch_np).save(os.path.join(output_dir, "best_graffiti_patch.png"))
-        torch.save(best_latent_code, os.path.join(output_dir, "best_latent_code.pt"))
-
-        for img_np, bboxes, image_path in real_sign_images_dataset:
-            patched_img = img_np.copy()
-            for bbox in bboxes:
-                patched_img = realistic_patch_applier(
-                    best_rgba_patch_np,
-                    patched_img,
-                    bbox,
-                    alpha=0.8,
-                    patch_scale=0.5,
-                    position_mode='center',
-                    use_seamless_clone=None,
-                    add_blur=True,
-                    add_noise=True
-                )
-            base_name = os.path.splitext(os.path.basename(image_path))[0]
-            cv2.imwrite(os.path.join(output_dir, f"{base_name}_patched.png"), patched_img)

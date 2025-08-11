@@ -33,11 +33,28 @@ def extract_graffiti_rgba_from_patch(patch_np, graffiti_mask):
     rgba[alpha == 0] = [0, 0, 0, 0]
     return rgba
 
-def match_color_statistics(src, target):
+def match_color_statistics(src, target, blend_factor=0.5):
+    """
+    Matches the color statistics of the source (patch) to the target (ROI),
+    with a blending factor to retain some of the original colors.
+    
+    Parameters:
+        src: Source image (patch) as a NumPy array.
+        target: Target image (ROI) as a NumPy array.
+        blend_factor: Float between 0 and 1. Higher values retain more of the original colors.
+    
+    Returns:
+        NumPy array with adjusted colors.
+    """
     src_mean, src_std = src.mean(axis=(0, 1)), src.std(axis=(0, 1))
     tgt_mean, tgt_std = target.mean(axis=(0, 1)), target.std(axis=(0, 1))
+    
+    # Match color statistics
     matched = (src - src_mean) / (src_std + 1e-6) * (tgt_std + 1e-6) + tgt_mean
-    return np.clip(matched, 0, 255)
+    
+    # Blend with original colors
+    blended = blend_factor * src + (1 - blend_factor) * matched
+    return np.clip(blended, 0, 255)
 
 def match_patch_color(patch_rgb, roi):
     return match_color_statistics(patch_rgb, roi)
@@ -87,6 +104,8 @@ def realistic_patch_applier(
     alpha=1.0,
     patch_scale=1.0,
     position_mode='center',
+    x_offset=0.0,  # Used only in 'free' mode
+    y_offset=0.0,  # Used only in 'free' mode
     use_seamless_clone=False,
     add_blur=True,
     add_noise=True
@@ -96,7 +115,7 @@ def realistic_patch_applier(
     sign_image_float = sign_image_np.astype(np.float32)
     patched_image_np = sign_image_float.copy()
     patch_x_min, patch_y_min, patch_width, patch_height = compute_patch_position(
-        target_bbox_on_sign, patch_scale, position_mode
+        target_bbox_on_sign, patch_scale, position_mode,x_offset=x_offset, y_offset=y_offset
     )
     patch_x_max = patch_x_min + patch_width
     patch_y_max = patch_y_min + patch_height
