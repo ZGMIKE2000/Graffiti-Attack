@@ -38,22 +38,22 @@ def load_stylegan3_generator(snapshot_path: str, device: str = "cpu") -> torch.n
         logging.error(f"Unexpected error while loading StyleGAN3 generator: {e}")
         sys.exit(1)
 
-def load_yolov8_model(model_path: str, device: str = "cpu"):
+def load_yolo_model(model_path: str, device: str = "cpu"):
     """
     Load a YOLOv8 model from a checkpoint file.
 
     Args:
-        model_path (str): Path to the YOLOv8 .pt file.
+        model_path (str): Path to the YOLO .pt file.
         device (str): 'cpu' or 'cuda'.
 
     Returns:
-        YOLO: The loaded YOLOv8 model.
+        YOLO: The loaded YOLO model.
     """
-    logging.info(f"Loading YOLOv8 model from {model_path}...")
+    logging.info(f"Loading YOLO model from {model_path}...")
     try:
         from ultralytics import YOLO
         model = YOLO(model_path).to(device)
-        logging.info("YOLOv8 model loaded successfully.")
+        logging.info("YOLO model loaded successfully.")
         return model
     except FileNotFoundError:
         logging.error(f"Model file not found: {model_path}")
@@ -62,5 +62,5 @@ def load_yolov8_model(model_path: str, device: str = "cpu"):
         logging.error("Ultralytics YOLO not installed. Please run 'pip install ultralytics'.")
         sys.exit(1)
     except Exception as e:
-        logging.error(f"Unexpected error while loading YOLOv8 model: {e}")
+        logging.error(f"Unexpected error while loading YOLO model: {e}")
         sys.exit(1)

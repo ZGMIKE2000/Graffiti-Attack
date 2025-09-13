@@ -75,7 +75,7 @@ def build_dataset(images_path, bbox_folder=None, target_class_id=None):
     return real_sign_images_dataset
 
 def process_image(
-    G_frozen, yolov8_model, images_path, bbox_folder, target_class_id,
+    G_frozen, yolo_model, images_path, bbox_folder, target_class_id,
     num_generations, population_size, output_dir, checkpoint_dir, bbox_path=None
 ):
     """
@@ -83,7 +83,7 @@ def process_image(
 
     Args:
         G_frozen: The generator model.
-        yolov8_model: The YOLOv8 model.
+        yolo_model: The YOLO model.
         images_path: Path to a single image or a list of image paths.
         bbox_folder: Folder containing YOLO bbox .txt files (batch mode).
         target_class_id: Target class ID for optimization.
@@ -100,9 +100,14 @@ def process_image(
     logging.info(f"bbox_path: {bbox_path}")
     # Build the dataset
     img_dataset = build_dataset(images_path, bbox_folder, target_class_id)
+    # If yolo_model is a list, pass it as ensemble to optimization
+    if isinstance(yolo_model, list):
+        logging.info(f"Using YOLO ensemble with {len(yolo_model)} models.")
+    else:
+        logging.info("Using single YOLO model.")
 
     run_es_optimization(
-        G_frozen, yolov8_model, img_dataset,
+        G_frozen, yolo_model, img_dataset,
         target_class_id,
         num_generations=num_generations, population_size=population_size,
         checkpoint_dir=checkpoint_dir

@@ -20,20 +20,20 @@ logging.basicConfig(
 )
 
 def evaluate_patch_effectiveness_single(
-    yolov8_model, patched_image_np: np.ndarray, target_class_id: int
+    yolo_model, patched_image_np: np.ndarray, target_class_id: int
 ) -> float:
     """
     Evaluate the effectiveness of a patch for a single target class.
 
     Args:
-        yolov8_model: YOLOv8 model for evaluation.
+        yolo_model: YOLO model for evaluation.
         patched_image_np (np.ndarray): Patched image.
         target_class_id (int): Target class ID.
 
     Returns:
         float: Highest confidence for the target class (lower is better).
     """
-    results = yolov8_model(patched_image_np, verbose=False)
+    results = yolo_model(patched_image_np, verbose=False)
     if not results or not hasattr(results[0], "boxes") or results[0].boxes is None:
         return 0.0  # No detections = perfect fooling
 
@@ -43,8 +43,20 @@ def evaluate_patch_effectiveness_single(
         default=0.0,
     )
 
+def evaluate_patch_effectiveness_ensemble_mean(
+    yolo_models: list, patched_image_np: np.ndarray, target_class_id: int
+) -> float:
+    """
+    Evaluate the patch on all models and return the mean confidence.
+    """
+    confidences = []
+    for model in yolo_models:
+        conf = evaluate_patch_effectiveness_single(model, patched_image_np, target_class_id)
+        confidences.append(conf)
+    return float(np.mean(confidences))
+
 def evaluate_patch_effectiveness_batch(
-    yolov8_model, patched_images: list, target_class_ids: list
+    yolo_model, patched_images: list, target_class_ids: list
 ) -> list:
     """
     Evaluate a batch of patched images for the highest confidence of any target class.
@@ -54,7 +66,7 @@ def evaluate_patch_effectiveness_batch(
     if isinstance(target_class_ids, int):
         target_class_ids = [target_class_ids]
         
-    results = yolov8_model(patched_images, verbose=False)
+    results = yolo_model(patched_images, verbose=False)#multi_label=True
     confidences = []
     for res in results:
         if not hasattr(res, "boxes") or res.boxes is None:
@@ -69,33 +81,18 @@ def evaluate_patch_effectiveness_batch(
             confidences.append(conf)
     return confidences
 
-def compute_baseline_confidences(
-    yolov8_model, 
-    dataset: List[Tuple[np.ndarray, List]], 
-    target_class_id: int
-) -> List[float]:
+def evaluate_patch_effectiveness_batch_ensemble_mean(
+    yolo_models: list, patched_images: list, target_class_ids: list
+) -> list:
     """
-    Compute baseline confidences for the target class(es) in the unpatched images.
-
-    Args:
-        yolov8_model: YOLOv8 model for evaluation.
-        dataset (List[Tuple[np.ndarray, List]]): Dataset of images and bounding boxes.
-        target_class_ids (List[int]): List of target class IDs.
-
-    Returns:
-        List[float]: Baseline confidences for each image in the dataset.
+    Evaluate a batch of patched images on all models and return the mean confidence per image.
     """
-    baseline_confidences = []
-    for idx, (img_np, _, *_) in enumerate(dataset):
-        # Run YOLO on the unpatched image
-        confidence = evaluate_patch_effectiveness_single(
-            yolov8_model=yolov8_model,
-            patched_image_np=img_np,
-            target_class_id=target_class_id
-        )
-        baseline_confidences.append(confidence)
-        logging.info(f"Image {idx}: Baseline confidence = {confidence:.4f}")
-    return baseline_confidences
+    all_model_confidences = []
+    for model in yolo_models:
+        confs = evaluate_patch_effectiveness_batch(model, patched_images, target_class_ids)
+        all_model_confidences.append(confs)
+    # Aggregate: mean confidence for each image
+    return list(np.mean(all_model_confidences, axis=0))
 
 def generate_patch(generator_model, latent_np: np.ndarray, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -120,8 +117,7 @@ def generate_patch(generator_model, latent_np: np.ndarray, device: torch.device)
 def evaluate_patch_eot(
     gen_mask_np: np.ndarray,
     dataset: List[Tuple[np.ndarray, List]],
-    yolov8_model,
-    baseline_confidences: List[float],
+    yolo_model,
     target_class_ids: List[int],
     alpha: float = 1.0,
     patch_scale: float = 1.0,
@@ -160,11 +156,13 @@ def evaluate_patch_eot(
 
         # Batch inference
         if patched_images:
-            batch_confidences = evaluate_patch_effectiveness_batch(yolov8_model, patched_images, target_class_ids)
+            if isinstance(yolo_model, list):
+                batch_confidences = evaluate_patch_effectiveness_batch_ensemble_mean(yolo_model, patched_images, target_class_ids)
+            else:
+                batch_confidences = evaluate_patch_effectiveness_batch(yolo_model, patched_images, target_class_ids)
             image_losses = []
             for patched_conf in batch_confidences:
-                baseline_conf = baseline_confidences[idx]
-                loss = patched_conf - baseline_conf
+                loss = patched_conf
                 image_losses.append(loss)
             losses.append(np.mean(image_losses))
         else:
@@ -172,31 +170,77 @@ def evaluate_patch_eot(
 
     return losses
 
+def save_yolo_pred_image(image_np, yolo_model, output_dir, call_count):
+    results = yolo_model(image_np, verbose=False)
+    if not results or not hasattr(results[0], "boxes") or results[0].boxes is None:
+        cv2.imwrite(os.path.join(output_dir, f"yolo_pred.png"), image_np)
+        return
+    boxes = results[0].boxes
+    img_draw = image_np.copy()
+    for i in range(len(boxes.xyxy)):
+        x1, y1, x2, y2 = map(int, boxes.xyxy[i])
+        conf = float(boxes.conf[i])
+        cls = int(boxes.cls[i])
+        cv2.rectangle(img_draw, (x1, y1), (x2, y2), (0,255,0), 2)
+        cv2.putText(img_draw, f"{cls}:{conf:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
+    cv2.imwrite(os.path.join(output_dir, f"yolo_pred.png"), img_draw)
+
 def save_checkpoint(
     gen_img_np: np.ndarray,
+    gen_mask_np: np.ndarray,
     latent_np: np.ndarray,
     output_dir: str,
     call_count: int,
     max_loss: float,
     best_loss: float,
-    is_best: bool = False
+    is_best: bool = False,
+    yolo_model=None,
+    dataset=None,  # Pass your dataset here: List[Tuple[image_np, bboxes, ...]]
+    alpha=1.0,
+    patch_scale=1.0,
+    x_offset=0.0,
+    y_offset=0.0
 ) -> None:
-    """
-    Save the current patch and latent vector as a checkpoint.
+    checkpoint_subdir = os.path.join(output_dir, f"checkpoint_{call_count}")
+    os.makedirs(checkpoint_subdir, exist_ok=True)
 
-    Args:
-        gen_img_np (np.ndarray): Generated patch image.
-        latent_np (np.ndarray): Latent vector.
-        output_dir (str): Directory to save checkpoints.
-        call_count (int): Current evaluation count.
-        max_loss (float): Current loss.
-        best_loss (float): Best loss so far.
-        is_best (bool): Whether this is the best checkpoint.
-    """
-    patch_path = os.path.join(output_dir, f"graffiti_patch_eval_{call_count}.png")
+    patch_path = os.path.join(checkpoint_subdir, "graffiti_patch.png")
     cv2.imwrite(patch_path, gen_img_np)
-    latent_path = os.path.join(output_dir, f"latent_eval_{call_count}.npy")
+    latent_path = os.path.join(checkpoint_subdir, "latent.npy")
     np.save(latent_path, latent_np)
+
+    # Save patched images with YOLO predictions for all images in the dataset
+    if yolo_model is not None and dataset is not None:
+        for idx, (sign_image_np, bboxes, *_) in enumerate(dataset):
+            patched_image = sign_image_np.copy()
+            for bbox in bboxes:
+                patched_image = realistic_patch_applier(
+                    graffiti_rgba_patch_np=gen_mask_np,
+                    sign_image_np=patched_image,
+                    target_bbox_on_sign=bbox,
+                    alpha=alpha,
+                    patch_scale=patch_scale,
+                    position_mode="free",
+                    x_offset=x_offset,
+                    y_offset=y_offset,
+                    use_seamless_clone=False,
+                    add_blur=True,
+                    add_noise=True
+                )
+            # Save YOLO prediction image for the fully patched image
+            results = yolo_model(patched_image, verbose=False)
+            img_draw = patched_image.copy()
+            if results and hasattr(results[0], "boxes") and results[0].boxes is not None:
+                boxes = results[0].boxes
+                for i in range(len(boxes.xyxy)):
+                    x1, y1, x2, y2 = map(int, boxes.xyxy[i])
+                    conf = float(boxes.conf[i])
+                    cls = int(boxes.cls[i])
+                    cv2.rectangle(img_draw, (x1, y1), (x2, y2), (0,255,0), 2)
+                    cv2.putText(img_draw, f"{cls}:{conf:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
+            save_path = os.path.join(checkpoint_subdir, f"patched_{idx}_all_yolo.png")
+            cv2.imwrite(save_path, img_draw)
+
     if is_best:
         logging.info(f"New best loss: {best_loss:.4f} at eval {call_count}")
     else:
@@ -212,7 +256,7 @@ def is_significantly_different(latent1, latent2, scale1, scale2, pos1, pos2, lat
     return (latent_diff > latent_thresh) or (scale_diff > scale_thresh) or (pos_diff > pos_thresh)
 
 def run_es_optimization(
-    generator_model, yolov8_model, real_sign_images_dataset,
+    generator_model, yolo_model, real_sign_images_dataset,
     target_class_ids, num_generations, population_size, checkpoint_dir
 ):
     """
@@ -222,7 +266,7 @@ def run_es_optimization(
 
     Args:
         generator_model: StyleGAN3 generator model.
-        yolov8_model: YOLOv8 model for evaluation.
+        yolo_model: YOLOv8 model for evaluation.
         real_sign_images_dataset: Dataset of images and bounding boxes.
         target_class_ids: List of target class IDs for the attack.
         num_generations: Number of generations for the ES optimization.
@@ -240,30 +284,20 @@ def run_es_optimization(
     # Ensure the output directory exists
     os.makedirs(checkpoint_dir, exist_ok=True)
 
-
-    # Compute baseline confidences
-    logging.info("Computing baseline confidences...")
-    baseline_confidences = compute_baseline_confidences(
-        yolov8_model=yolov8_model,
-        dataset=real_sign_images_dataset,
-        target_class_id=target_class_ids
-    )
-    logging.info(f"Baseline confidences: {baseline_confidences}")
-
     # search_space = ng.p.Array(shape=(latent_dim,)).set_bounds(-3, 3)  # Latent code bounds
     # Define the search space (latent code + positioning parameters)
     latent_bounds = (-3, 3)  # Bounds for latent code
     alpha_bounds = (0.5, 1.0)    # Bounds for alpha (transparency)
     offset_bounds = (-50, 50)  # Example bounds for x_offset and y_offset (adjust based on image dimensions)
-    scale_bounds = (0.4,0.6)  # Bounds for patch_scale (adjust based on your requirements)
+    scale_bounds = (0.6,0.8)  # Bounds for patch_scale (adjust based on your requirements)
 
     # Create a tuple for the search space
     instrumentation = ng.p.Tuple(
-        ng.p.Array(shape=(latent_dim,)).set_bounds(*latent_bounds).set_mutation(sigma=1.0),  # Latent code
-        ng.p.Scalar(init=0.75).set_bounds(*alpha_bounds).set_mutation(sigma=0.1),                                   # Alpha (init=0.75 within 0.5-1.0)
-        ng.p.Scalar(init=0.0).set_bounds(*offset_bounds).set_mutation(sigma=2),                                  # x_offset (init=0.0 within -50 to 50)
-        ng.p.Scalar(init=0.0).set_bounds(*offset_bounds).set_mutation(sigma=2),                                  # y_offset (init=0.0 within -50 to 50)
-        ng.p.Scalar(init=0.5).set_bounds(*scale_bounds).set_mutation(sigma=0.05)                                  # patch_scale (init=0.5 within 0.2-1.0)
+        ng.p.Array(shape=(latent_dim,)).set_bounds(*latent_bounds).set_mutation(sigma=4.0),  # Latent code
+        ng.p.Scalar(init=0.75).set_bounds(*alpha_bounds).set_mutation(sigma=0.2),                                   # Alpha (init=0.75 within 0.5-1.0)
+        ng.p.Scalar(init=0.0).set_bounds(*offset_bounds).set_mutation(sigma=8),                                  # x_offset (init=0.0 within -50 to 50)
+        ng.p.Scalar(init=0.0).set_bounds(*offset_bounds).set_mutation(sigma=8),                                  # y_offset (init=0.0 within -50 to 50)
+        ng.p.Scalar(init=0.7).set_bounds(*scale_bounds).set_mutation(sigma=0.1)                                  # patch_scale (init=0.5 within 0.2-1.0)
     )
 
     def objective(params):
@@ -273,8 +307,7 @@ def run_es_optimization(
         losses = evaluate_patch_eot(
             gen_mask_np=gen_mask_np,
             dataset=real_sign_images_dataset,
-            yolov8_model=yolov8_model,
-            baseline_confidences=baseline_confidences,
+            yolo_model=yolo_model,
             target_class_ids=target_class_ids,
             alpha=alpha,
             patch_scale=patch_scale,
@@ -285,30 +318,32 @@ def run_es_optimization(
         current_loss = np.mean(losses)
 
 
-        # save if the best loss patch's latent code is different from the previously saved one or if its not the best loss path, save only if the loss improved
-        if np.allclose(losses, -np.array(baseline_confidences), atol=1e-4):
-            should_save = (objective.last_saved_latent is None or 
-            is_significantly_different(
-                latent_np, objective.last_saved_latent,
-                patch_scale, objective.last_saved_scale,
-                (x_offset, y_offset), objective.last_saved_pos
-                )    
-            )
-        else:
-            logging.info(f"current_loss: {current_loss}, objective best loss:{objective.best_loss}")
-            should_save = (abs(current_loss)-abs(objective.best_loss) >= 0.02 )
+        # Save if the latent code is significantly different or if the loss improved
+        logging.info(f"current_loss: {current_loss}, objective best loss:{objective.best_loss}")
+        # Save only if a new best loss is found or every N evaluations
+        N = 100  # Save every 100 evaluations for monitoring
+        should_save = (
+            current_loss < objective.best_loss or
+            objective.call_count % N == 0
+        )
 
         if should_save:
-            logging.info(f"wtf")
             gen_img_np, gen_mask_np = generate_patch(generator_model, latent_np, device)
             save_checkpoint(
                 gen_img_np=gen_img_np,
+                gen_mask_np=gen_mask_np,
                 latent_np=latent_np,
                 output_dir=checkpoint_dir,
                 call_count=objective.call_count,
                 max_loss=current_loss,
                 best_loss=current_loss,
-                is_best=True
+                is_best=True,
+                yolo_model=yolo_model,
+                dataset=real_sign_images_dataset,  # <-- Pass your dataset here!
+                alpha=alpha,
+                patch_scale=patch_scale,
+                x_offset=x_offset,
+                y_offset=y_offset
             )
             # Update last saved
             objective.last_saved_latent = np.copy(latent_np)
@@ -329,7 +364,7 @@ def run_es_optimization(
 
     # Initialize counters for saving checkpoints
     objective.call_count = 0
-    objective.best_loss = float(0)
+    objective.best_loss = float("inf")
 
     if not hasattr(objective, "last_saved_latent"):
         objective.last_saved_latent = None
@@ -351,5 +386,6 @@ def run_es_optimization(
         call_count="final_recommendation",
         max_loss=0.0,
         best_loss=objective.best_loss,
-        is_best=True
+        is_best=True,
+        yolo_model=yolo_model
     )

@@ -10,7 +10,7 @@ import numpy as np
 sys.path.append('/home/michele/hdd/stylegan3_error')
 
 from processing import process_image
-from models import load_stylegan3_generator, load_yolov8_model
+from models import load_stylegan3_generator, load_yolo_model
 
 def load_config(config_path):
     with open(config_path, 'r') as f:
@@ -29,7 +29,7 @@ logging.basicConfig(
 @click.command()
 @click.option('--config', type=click.Path(exists=True), help="YAML config file with arguments")
 @click.option('--gan-snapshot-path', required=True, type=click.Path(exists=True), help="Path to StyleGAN3 .pkl")
-@click.option('--yolo-model-path', required=True, type=click.Path(exists=True), help="Path to YOLOv8 .pt")
+@click.option('--yolo-model-path', required=True, multiple=True, type=click.Path(exists=True), help="Path(s) to YOLO .pt file(s), can specify multiple for ensemble")
 @click.option('--img-path', type=click.Path(), help="Path to a single sign image")
 @click.option('--img-folder', type=click.Path(), help="Folder with sign images (batch mode)")
 @click.option('--bbox-path', type=click.Path(exists=True), default=None, help="Path to YOLO bbox .txt file (single image mode)")
@@ -64,7 +64,11 @@ def main(gan_snapshot_path, yolo_model_path, img_path, img_folder, bbox_path, bb
     # --- Load Models ---
     G_frozen = load_stylegan3_generator(os.path.expanduser(gan_snapshot_path), device)
     G_frozen.eval()
-    yolov8_model = load_yolov8_model(os.path.expanduser(yolo_model_path), device)
+
+    # Load one or more YOLO models
+    yolo_models = [load_yolo_model(os.path.expanduser(path), device) for path in yolo_model_path]
+    # If only one model, use the model directly
+    yolo_models = yolo_models[0] if len(yolo_models) == 1 else yolo_models
 
     # --- Batch or Single Image ---
     if img_folder:
@@ -80,7 +84,7 @@ def main(gan_snapshot_path, yolo_model_path, img_path, img_folder, bbox_path, bb
             sys.exit(1)
 
         process_image(
-            G_frozen, yolov8_model,
+            G_frozen, yolo_models,
             image_files, bbox_folder, target_class_id,
             num_generations, population_size, output_dir, checkpoint_dir
         )
@@ -92,7 +96,7 @@ def main(gan_snapshot_path, yolo_model_path, img_path, img_folder, bbox_path, bb
             sys.exit(1)
 
         process_image(
-            G_frozen, yolov8_model,
+            G_frozen, yolo_models,
             img_path, bbox_path, target_class_id,
             num_generations, population_size, output_dir,checkpoint_dir
         )
