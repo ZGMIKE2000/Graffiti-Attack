@@ -1,49 +1,77 @@
 # Graffiti Attack
+## Adversarial Patch Optimization Using GAN
 
-## Adversarial Patch Optimization Using StyleGAN3, YOLOv8, and Nevergrad
+This project explores the creation of naturalistic adversarial patches in the form of graffiti to disrupt object detection models used in autonomous driving scenarios. The goal is to generate visually realistic graffiti that can reduce detection confidence or suppress detection entirely on traffic signs, particularly Stop signs, which are critical for safety.
 
-This project investigates the use of generative models and black-box optimization to produce naturalistic adversarial patches in the form of graffiti, aimed at degrading the performance of object detection systems in autonomous driving scenarios.
+## Project Overview
 
-### Generator: StyleGAN3 (Fine-tuned on Graffiti Data)
+The attack follows a two-step approach:
 
-The generator is based on **StyleGAN3**, fine-tuned on a curated dataset of approximately 1,000 graffiti images. StyleGAN3 is selected for:
+- White-box fine-tuning of a generator: Learning both natural graffiti styles and adversarial features using a differentiable object detector.
 
-- **High style diversity**, enabling generation of visually diverse graffiti patterns that mimic real-world variability.
-- **Adaptive Data Augmentation (ADA)**, improving training robustness under limited data conditions.
+- Black-box latent space search: Using evolutionary optimization to identify the most effective patch parameters and latent codes for physical deployment.
 
-Naturalness survey to be conducted on the generated patches.
+The combination of these steps ensures that patches are both natural-looking and adversarially effective in real-world conditions.
 
-### Patch Extraction and Application
 
-Generated graffiti samples are post-processed using **OpenCV** to extract the relevant patch region, which is then overlaid onto traffic sign images.  
-The patches are applied after some augmentations from Kornia repository and then tested against the yolov8m model. Current approach of the loss calculation is based the average loss of each patched image evaluation on the yolo model wrt the pre-patched image.
+## Generator: StyleGAN3
 
-### Adversarial Optimization Strategy
+We use StyleGAN3, fine-tuned on a curated dataset of ~1,000 graffiti images. StyleGAN3 was chosen for:
 
-The target detection model is **YOLOv8m**, treated as a **black-box**.  
-Since gradient access is unavailable, **Nevergrad** (evolutionary optimizer) is used to search the StyleGAN3 latent space for graffiti samples that maximize the adversarial effect.
+High style diversity: Can produce a wide variety of realistic graffiti patterns.
 
-Two attack objectives are considered:
+Adaptive Data Augmentation (ADA): Improves robustness under limited data conditions.
 
-- **Detection Attack:** Minimize detection confidence or suppress detection entirely.
-- **Classification Attack:** Induce misclassification (e.g., "Stop Sign" → "Speed Limit").
+Two-step Fine-tuning
 
-Currently focusing on the Detection Attack with an aim on Stop signs, considering it's critical role in autonomous driving scenarios.
+- Stage 1 – Natural Graffiti Learning
 
-About the Yolo model: The model is finetuned on a custom dataset retrieved from the mapillary dataset using its API.
+The generator is trained on graffiti images to learn the underlying style distribution.
 
-### Planned Enhancements
+Focus: Naturalness, ensuring generated patches resemble real-world graffiti.
 
-- **Surrogate Model Integration:** A white-box model will be embedded in GAN training to guide generation (edges and shapes).
-- **Cross-Model Evaluation:** Additional detectors will be tested to assess transferability of the adversarial patches.
+- Stage 2 – White-box Adversarial Fine-tuning
 
-### Current results summary
+Using a YOLOv8 detector as a white-box, we calculate gradients w.r.t objectness and class probabilities.
 
-In prior experiments, adversarial patches smaller than 90% of the traffic sign’s area exhibited limited effectiveness against the YOLO detector. However, when patch scale, transparency (alpha), and positional coordinates are jointly optimized within the evolutionary search, successful attacks (stop signs not detected) are achievable with patches occupying as little as 50% of the sign’s area.
+Gradients are backpropagated through the generator to imbue patches with adversarial features.
 
-Experimentations are still on-going, there will be tables of results for clarity.
+All transformations and augmentations in this stage are fully differentiable, allowing end-to-end gradient optimization.
 
--Eventual testing on other classes and robust benchmarking results will be retrieved.
+## Patch Extraction and Overlay
+
+Generated graffiti samples are post-processed using OpenCV to extract the patch region.
+
+Patches are overlaid onto traffic sign images with augmentations from the Kornia library.
+
+Losses are calculated by comparing the model’s predictions on patched vs. original images.
+
+Note: In black-box experiments, only non-differentiable CV operations are used—no gradients are accessed.
+
+## Black-box Optimization: Latent Search with Nevergrad
+
+To optimize patches for physical deployment:
+
+We treat the YOLO model as a black-box, with no gradient access.
+
+CMA-ES (Covariance Matrix Adaptation) from Nevergrad is used to search the StyleGAN3 latent space.
+
+Optimization jointly searches for:
+
+Best latent code for patch generation.
+
+Optimal patch position, scale, and transparency on the traffic sign.
+
+This iterative search allows us to identify patches that are robust and adversarially effective in real-world conditions.
+
+
+## Experiment Summary
+
+Patches covering ~50–90% of a sign can disrupt YOLO detection.
+
+Smaller patches (<50%) generally require careful optimization of position, alpha, and scale.
+
+Current experiments focus on Stop signs, with plans to extend to other classes for benchmarking.
 
 ---
 
@@ -51,23 +79,30 @@ Experimentations are still on-going, there will be tables of results for clarity
 
 ```
 graffiti_attack/
-├──src
-    ├── eot.py             # EOT augmentation pipeline from Kornia
-    ├── main.py            # Main file
-    ├── models.py          # Loads StyleGAN3 and YOLOv8 models
-    ├── optimization.py    # Evolution strategy and loss functions
-    ├── patch.py           # Patch creation, masking, and application logic
-    ├── placement.py       # Helper for patching mechanism
-    ├── processing.py      # Helper for optimization mechanism
-    ├── utils.py           # Helper utilities
-    ├── test_models.py     # Sanity check for model loading
-├── requirements.txt   # Dependencies (excludes StyleGAN3)
-└── README.md          # This file
+├── src/
+│   ├── whitebox/
+│   │   ├── eot.py             # EOT augmentation pipeline from Kornia
+│   │   ├── main_whitebox.py   # Main script for white-box fine-tuning
+│   │   ├── models.py          # Loads StyleGAN3 and YOLOv8 models (white-box)
+│   │   ├── patch.py           # Patch creation, masking, and application logic
+│   │   ├── placement.py       # Helper for patching mechanism
+│   │   ├── processing.py      # Helper for white-box optimization (gradients, losses)
+│   │
+│   ├── blackbox/
+│   │   ├── main_blackbox.py   # Main script for black-box latent search
+│   │   ├── optimization.py    # Evolution strategy (CMA-ES) and loss functions
+│   │   ├── patch.py           # Patch creation, masking, and application logic (non-differentiable)
+│   │   ├── placement.py       # Helper for patching mechanism
+│   │
+│   ├── utils.py               # Shared helper utilities
+│   ├── test_models.py         # Sanity check for model loading
+├── requirements.txt           # Dependencies (excludes StyleGAN3)
+└── README.md                  # This file
 ```
 
 ## Notes
 
-This work is part of my Master's thesis project conducted at Waseda University under the supervision of Prof. Tatsuya Mori.
+This work is part of my Master's thesis project conducted at Waseda University under the supervision of Prof. Tatsuya Mori, in collaboration with Politecnico di Milano under the supervision of Prof. Stefano Zanero.
 
 ---
 
