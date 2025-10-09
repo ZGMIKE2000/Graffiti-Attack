@@ -65,6 +65,9 @@ class GraffitiPatchGenerator:
         best_quantile = None
         best_score = -float('inf')
         best_mask = None
+        fallback_score = -float('inf')
+        fallback_mask = None
+        fallback_quantile = None
         B, C, H, W = patch.shape
         for q in np.linspace(*quantile_range, steps):
             mask = self._extract_mask(patch, border=border, quantile=q, sharpness=sharpness)
@@ -78,10 +81,20 @@ class GraffitiPatchGenerator:
             border_mean = border_mask.mean().item()
             center_mean = center_mask.mean().item()
             score = center_mean - border_mean * 2
+            # Save best overall (fallback) in case border_mean < 0.1 is never satisfied
+            if score > fallback_score:
+                fallback_score = score
+                fallback_quantile = q
+                fallback_mask = mask
+            # Save best that satisfies border_mean < 0.1
             if border_mean < 0.1 and score > best_score:
                 best_score = score
                 best_quantile = q
                 best_mask = mask
+        # Fallback: if no mask found with border_mean < 0.1, use the best overall
+        if best_mask is None:
+            best_mask = fallback_mask
+            best_quantile = fallback_quantile
         return best_mask, best_quantile
 
     def _to_rgba(self, patch, mask):

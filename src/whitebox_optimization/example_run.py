@@ -13,8 +13,8 @@ import legacy
 from graffiti_trainer import GraffitiTrainer
 
 # --- Paths (update as needed) ---
-image_dir = "../dataset/stop_signs/images"
-label_dir = "../dataset/stop_signs/labels"
+image_dir = "../dataset/physical/images"
+label_dir = "../dataset/physical/labels"
 gan_ckpt = "../models/network-snapshot-001400.pkl"
 yolo_ckpt = "../models/yolov8n_best.pt"
 
@@ -43,7 +43,7 @@ optimizer = torch.optim.Adam([z], lr=0.05)
 
 # --- Train using GraffitiTrainer ---
 trainer = GraffitiTrainer(generator, yolo, dataloader, dataset, device=device)
-trainer.train_latent(z, optimizer, num_steps=10, target_class=None, reduction="max")
+trainer.train_latent(z, optimizer, num_steps=1000, target_class=None, reduction="max")
 
 # Notes:
 # - This script performs adversarial optimization of a latent vector z to maximize YOLOv8 loss.
