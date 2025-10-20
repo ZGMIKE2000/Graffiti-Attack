@@ -1,13 +1,14 @@
-import torch
-import torch.nn.functional as F
-from patch_overlay import overlay_patch_rgba
-import matplotlib.pyplot as plt
-from ultralytics.utils.loss import v8DetectionLoss
-import itertools
-import logging
-import numpy as np 
-import cv2
 import os
+import cv2
+import torch
+import logging
+import itertools
+import numpy as np 
+import matplotlib.pyplot as plt
+import torch.nn.functional as F
+
+from patch_overlay import overlay_patch_rgba
+from ultralytics.utils.loss import v8DetectionLoss
 
 class GraffitiTrainer:
     """
@@ -15,9 +16,9 @@ class GraffitiTrainer:
     Applies a generated patch to images, computes detection loss, and optimizes the latent vector.
     """
 
-    def __init__(self, generator, yolo, dataloader, dataset, device="cuda", log_file=None):
-        output_root = "outputs_70_2"
-        os.makedirs(output_root, exist_ok=True)
+    def __init__(self, generator, yolo, dataloader, dataset, device="cuda", output_root="output", log_file=None):
+        self.output_root = output_root
+        # os.makedirs(output_root, exist_ok=True)
         if log_file is None:
             log_file = os.path.join(output_root, "training.log")
         self.generator = generator
@@ -37,7 +38,7 @@ class GraffitiTrainer:
         )
         self.logger = logging.getLogger("GraffitiTrainer")
 
-    def train_latent(self, z, optimizer, num_steps=10, target_class=None, reduction="max"):
+    def train_latent(self, z, optimizer, num_steps=10):
         """
         Optimize the latent vector z to maximize YOLOv8 detection loss on patched images.
 
@@ -49,11 +50,10 @@ class GraffitiTrainer:
             reduction: (Unused) Loss reduction method
         """
         # --- Create output directories ---
-        output_root = "outputs_70_2"
-        composite_dir = os.path.join(output_root, "composites")
-        yolo_vis_dir = os.path.join(output_root, "yolo_visualizations")
-        grad_hist_dir = os.path.join(output_root, "grad_histograms")
-        latent_vector_dir = os.path.join(output_root, "latent_vectors")
+        composite_dir = os.path.join(self.output_root, "composites")
+        yolo_vis_dir = os.path.join(self.output_root, "yolo_visualizations")
+        grad_hist_dir = os.path.join(self.output_root, "grad_histograms")
+        latent_vector_dir = os.path.join(self.output_root, "latent_vectors")
         os.makedirs(composite_dir, exist_ok=True)
         os.makedirs(yolo_vis_dir, exist_ok=True)
         os.makedirs(grad_hist_dir, exist_ok=True)
@@ -84,7 +84,7 @@ class GraffitiTrainer:
 
             # --- Overlay patch on all bboxes in the image ---
             composite_tensor = orig_img_tensor.clone()
-            patch_scale = 0.7  # 70% of bbox size (change as needed)
+            patch_scale = 0.8  # 70% of bbox size (change as needed)
 
             # Inside your bbox loop:
             for bbox in orig_bboxes:
@@ -177,7 +177,16 @@ class GraffitiTrainer:
             loss_history.append(loss_scalar)
             optimizer.zero_grad()
 
-            loss.sum().backward()
+            try:
+                loss.sum().backward()
+            except RuntimeError as e:
+                if "returned nan values" in str(e).lower() or "nan" in str(e).lower():
+                    self.logger.warning(f"NaN detected in backward at step {step+1}, skipping optimizer step. Error: {e}")
+                    optimizer.zero_grad()
+                    continue
+                else:
+                    raise  # re-raise if it's a different error
+
             if z.grad is not None and (torch.isnan(z.grad).any() or torch.isinf(z.grad).any()):
                 self.logger.warning(f"Gradient is NaN or Inf at step {step+1}, skipping optimizer step.")
                 optimizer.zero_grad()
@@ -280,8 +289,13 @@ class GraffitiTrainer:
             # Clamp z after optimizer step to prevent explosion
             with torch.no_grad():
                 z.clamp_(-10, 10)  # Adjust range as needed
+
+            # Add at the end of each training loop iteration, just before the next step
+            del composite_tensor, composite_for_yolo, patch, mask, patch_rgba, preds, loss
+            torch.cuda.empty_cache()
+
         # --- Save optimized latent vector ---
-        latent_path = os.path.join(output_root, "optimized_latent.pt")
+        latent_path = os.path.join(self.output_root, "optimized_latent.pt")
         torch.save(z.detach().cpu(), latent_path)
         self.logger.info(f"Optimized latent vector saved to {latent_path}")
 
@@ -293,7 +307,7 @@ class GraffitiTrainer:
         plt.title("Latent Optimization Loss Curve")
         plt.legend()
         plt.tight_layout()
-        loss_curve_path = os.path.join(output_root, "latent_optimization_loss_curve.png")
+        loss_curve_path = os.path.join(self.output_root, "latent_optimization_loss_curve.png")
         plt.savefig(loss_curve_path)
         plt.close()
         self.logger.info(f"Loss curve saved to {loss_curve_path}")

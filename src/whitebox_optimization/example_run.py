@@ -1,20 +1,21 @@
 import os
 import sys
 import torch
+
 from torch.utils.data import DataLoader
 from dataset import StopSignBBoxDataset
+from graffiti_trainer import GraffitiTrainer
 from graffiti_generator import GraffitiPatchGenerator
 from ultralytics import YOLO
 
-# Add project root to sys.path for imports
+# added stylegan project root for its dnnlib and legacy modules, which loads the generator.
 sys.path.append(os.path.abspath("../../"))
 import dnnlib
 import legacy
-from graffiti_trainer import GraffitiTrainer
 
 # --- Paths (update as needed) ---
-image_dir = "../dataset/physical/images"
-label_dir = "../dataset/physical/labels"
+image_dir = "../dataset/carla_graffiti_dataset.v1-carla.yolov8/train/images_ablation"
+label_dir = "../dataset/carla_graffiti_dataset.v1-carla.yolov8/train/labels_ablation"
 gan_ckpt = "../models/network-snapshot-001400.pkl"
 yolo_ckpt = "../models/yolov8n_best.pt"
 
@@ -38,12 +39,37 @@ yolo.model.to(device)
 
 # --- Prepare latent vector and optimizer ---
 z_dim = getattr(G, "z_dim", 512)
-z = torch.randn(1, z_dim, device=device, requires_grad=True)
-optimizer = torch.optim.Adam([z], lr=0.05)
+# z = torch.randn(1, z_dim, device=device, requires_grad=True)
+# Example: Load from file
+# z = torch.load("/home/michele/hdd/stylegan3_error/adversarial_finetuning/src/outputs_70_1g/latent_vectors/latent_step_101.pt").to(device)
+# z.requires_grad = True
+# optimizer = torch.optim.Adam([z], lr=0.01)
+
 
 # --- Train using GraffitiTrainer ---
-trainer = GraffitiTrainer(generator, yolo, dataloader, dataset, device=device)
-trainer.train_latent(z, optimizer, num_steps=1000, target_class=None, reduction="max")
+num_tests = 10
+
+for n in range(num_tests):
+    test_dir = f"test_80_carla_{n}"
+    os.makedirs(test_dir, exist_ok=True)
+    # Option 1: Random latent with different seeds
+    z = torch.randn(1, z_dim, device=device, requires_grad=True)
+    z.requires_grad = True
+
+    optimizer = torch.optim.Adam([z], lr=0.05)
+
+    # Option 2: Load from a list of initial latents
+    # z = torch.load(f"init_latent_{n}.pt").to(device)
+    # z.requires_grad = True
+
+    # Set output directory for this run
+    log_file = os.path.join(test_dir, "training.log")
+    trainer = GraffitiTrainer(generator, yolo, dataloader, dataset, device=device, output_root=test_dir)
+    trainer.train_latent(z, optimizer, num_steps=1000)
+    # Move or copy results to test_dir as needed
+
+# trainer = GraffitiTrainer(generator, yolo, dataloader, dataset, device=device)
+# trainer.train_latent(z, optimizer, num_steps=1500)
 
 # Notes:
 # - This script performs adversarial optimization of a latent vector z to maximize YOLOv8 loss.
